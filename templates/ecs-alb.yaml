@@ -243,7 +243,14 @@ Resources:
       ServiceName: !Sub ${ProjectName}-service
       Cluster: !Ref Cluster
       TaskDefinition: !Ref TaskDefinition
-      DesiredCount: 1
+      # 0, not 1: the bootstrap task definition's placeholder image
+      # (public.ecr.aws) is unreachable from this NAT-less private subnet -
+      # it's never meant to actually run. Desired count is raised to 1
+      # right after stack creation, by which point the first CodeDeploy
+      # blue/green deployment (with the real ECR image) supersedes it.
+      # Keeping this at 1 would make CloudFormation wait forever for a
+      # task that can never start.
+      DesiredCount: 0
       LaunchType: FARGATE
       DeploymentController:
         Type: CODE_DEPLOY
