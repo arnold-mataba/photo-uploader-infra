@@ -1,0 +1,100 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Photo Uploader - RDS PostgreSQL (metadata store) and its Secrets Manager credential
+
+Parameters:
+  ProjectName:
+    Type: String
+  VpcId:
+    Type: String
+  PrivateSubnetA:
+    Type: String
+  PrivateSubnetB:
+    Type: String
+  DbInstanceClass:
+    Type: String
+    Default: db.t3.micro
+  DbName:
+    Type: String
+    Default: photouploader
+
+Resources:
+  DbSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub ${ProjectName}/rds/credentials
+      Description: Master credentials for the Photo Uploader RDS instance
+      GenerateSecretString:
+        SecretStringTemplate: '{"username":"photoapp"}'
+        GenerateStringKey: password
+        PasswordLength: 24
+        ExcludeCharacters: '"@/\'
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  DbSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: !Sub ${ProjectName} RDS subnet group (spans both AZs)
+      SubnetIds: [!Ref PrivateSubnetA, !Ref PrivateSubnetB]
+      Tags:
+        - Key: Project
+          Value: !Ref ProjectName
+
+  # No inline ingress here: the ECS tasks security group is created in a
+  # sibling stack (ecs-alb.yaml), which would create a circular nested-stack
+  # dependency. ecs-alb.yaml adds the actual 5432 ingress rule pointing back
+  # at this group once both stacks exist.
+  DbSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: PostgreSQL access - ingress rule added by the ecs-alb stack
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-rds-sg
+        - Key: Project
+          Value: !Ref ProjectName
+
+  DbInstance:
+    Type: AWS::RDS::DBInstance
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      Engine: postgres
+      DBInstanceClass: !Ref DbInstanceClass
+      AllocatedStorage: '20'
+      StorageType: gp3
+      DBName: !Ref DbName
+      MasterUsername: !Sub '{{resolve:secretsmanager:${DbSecret}:SecretString:username}}'
+      MasterUserPassword: !Sub '{{resolve:secretsmanager:${DbSecret}:SecretString:password}}'
+      DBSubnetGroupName: !Ref DbSubnetGroup
+      VPCSecurityGroups: [!Ref DbSecurityGroup]
+      MultiAZ: false
+      PubliclyAccessible: false
+      BackupRetentionPeriod: 1
+      StorageEncrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-rds
+        - Key: Project
+          Value: !Ref ProjectName
+
+  DbSecretAttachment:
+    Type: AWS::SecretsManager::SecretTargetAttachment
+    Properties:
+      SecretId: !Ref DbSecret
+      TargetId: !Ref DbInstance
+      TargetType: AWS::RDS::DBInstance
+
+Outputs:
+  DbEndpointAddress:
+    Value: !GetAtt DbInstance.Endpoint.Address
+  DbEndpointPort:
+    Value: !GetAtt DbInstance.Endpoint.Port
+  DbName:
+    Value: !Ref DbName
+  DbSecretArn:
+    Value: !Ref DbSecret
+  DbSecurityGroupId:
+    Value: !Ref DbSecurityGroup

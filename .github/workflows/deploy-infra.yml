@@ -1,0 +1,77 @@
+name: Package and deploy infrastructure
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'templates/**'
+      - 'codedeploy/**'
+      - '.github/workflows/deploy-infra.yml'
+
+permissions:
+  id-token: write
+  contents: read
+
+env:
+  AWS_REGION: us-east-1
+  STACK_NAME: photo-uploader-infra
+  DEPLOY_BUCKET: photo-uploader-infra-deploy-107737161507
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_INFRA_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Package nested templates
+        run: |
+          aws cloudformation package \
+            --template-file templates/root.yaml \
+            --s3-bucket "$DEPLOY_BUCKET" \
+            --s3-prefix cfn-artifacts \
+            --output-template-file packaged-root.yaml
+
+      - name: Deploy (create or update, idempotent either way)
+        run: |
+          aws cloudformation deploy \
+            --template-file packaged-root.yaml \
+            --stack-name "$STACK_NAME" \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides DeployBucketName="$DEPLOY_BUCKET" \
+            --no-fail-on-empty-changeset
+
+      - name: Render the CodeDeploy bundle from stack outputs
+        run: |
+          outputs=$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query 'Stacks[0].Outputs' --output json)
+          get() { echo "$outputs" | jq -r ".[] | select(.OutputKey==\"$1\") | .OutputValue"; }
+
+          export TASK_EXECUTION_ROLE_ARN=$(get TaskExecutionRoleArn)
+          export TASK_ROLE_ARN=$(get TaskRoleArn)
+          export DB_HOST=$(get DbEndpointAddress)
+          export DB_PORT=$(get DbEndpointPort)
+          export DB_NAME=$(get DbName)
+          export DB_SECRET_ARN=$(get DbSecretArn)
+          export IMAGES_BUCKET=$(get ImagesBucketName)
+          export CLOUDFRONT_DOMAIN=$(get DistributionDomainName)
+          export LOG_GROUP=$(get LogGroupName)
+          export AWS_REGION="$AWS_REGION"
+
+          mkdir -p bundle
+          envsubst < codedeploy/taskdef.template.json > bundle/taskdef.json
+          cp codedeploy/appspec.yaml bundle/appspec.yaml
+          cd bundle && zip -r ../bundle.zip . && cd ..
+
+      - name: Upload bundle for CodePipeline's S3 source action
+        run: |
+          aws s3 cp bundle.zip "s3://$DEPLOY_BUCKET/codedeploy-bundle/bundle.zip"
+
+      - name: Print ALB endpoint
+        run: |
+          aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query 'Stacks[0].Outputs[?OutputKey==`AlbDnsName`].OutputValue' --output text

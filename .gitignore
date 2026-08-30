@@ -1,0 +1,5 @@
+packaged-root.yaml
+bundle/
+bundle.zip
+*.pyc
+__pycache__/

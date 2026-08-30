@@ -1,0 +1,144 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Photo Uploader - one-time bootstrap: the S3 bucket `aws cloudformation package`
+  needs to exist before its first run, and the two per-repo GitHub Actions OIDC
+  roles. Deployed once manually via CLI, before either repo's CI can run.
+  Reuses the account's existing GitHub OIDC provider (created by a prior lab).
+
+Resources:
+  DeployBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub photo-uploader-infra-deploy-${AWS::AccountId}
+      VersioningConfiguration:
+        Status: Enabled
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      Tags:
+        - Key: Project
+          Value: photo-uploader
+
+  # ---- Infra repo: runs `aws cloudformation package && aws cloudformation deploy` ----
+  InfraDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: github-actions-cfn-package-photo-uploader
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:repository_id: '1351306199'
+                token.actions.githubusercontent.com:repository_owner_id: '296819917'
+                token.actions.githubusercontent.com:sub: repo:arnold-mataba/photo-uploader-infra:ref:refs/heads/main
+      Policies:
+        - PolicyName: CfnDeployPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: CloudFormationOnThisProjectsStacks
+                Effect: Allow
+                Action: cloudformation:*
+                Resource:
+                  - !Sub arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/photo-uploader-*/*
+              - Sid: PackageAndArtifactBucket
+                Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:GetBucketLocation, s3:ListBucket]
+                Resource:
+                  - !GetAtt DeployBucket.Arn
+                  - !Sub ${DeployBucket.Arn}/*
+              - Sid: PassRolesCreatedByTheseStacks
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub arn:aws:iam::${AWS::AccountId}:role/photo-uploader-*
+              - Sid: ProvisionEverythingTheNestedTemplatesDeclare
+                # Deliberately broad: this role's job IS to create/update every
+                # resource type declared in templates/*.yaml. Narrower scoping
+                # happens one level down, on the roles those templates create
+                # for runtime use (ECS task role/execution role, CodePipeline
+                # role, CodeDeploy role, EventBridge role) - see cicd.yaml /
+                # ecs-alb.yaml / data.yaml.
+                Effect: Allow
+                Action:
+                  - ec2:*
+                  - rds:*
+                  - secretsmanager:*
+                  - s3:*
+                  - cloudfront:*
+                  - ecr:*
+                  - ecs:*
+                  - elasticloadbalancing:*
+                  - application-autoscaling:*
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:TagRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - logs:*
+                  - events:*
+                  - codepipeline:*
+                  - codedeploy:*
+                Resource: '*'
+
+  # ---- App repo: builds the Docker image and pushes it to ECR ----
+  AppEcrPushRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: github-actions-ecr-push-photo-uploader
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+                token.actions.githubusercontent.com:repository_id: '1351306250'
+                token.actions.githubusercontent.com:repository_owner_id: '296819917'
+                token.actions.githubusercontent.com:sub: repo:arnold-mataba/photo-uploader-app:ref:refs/heads/main
+      Policies:
+        - PolicyName: EcrPushPermissions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                  - ecr:PutImage
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                Resource: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/photo-uploader-app
+
+Outputs:
+  DeployBucketName:
+    Value: !Ref DeployBucket
+  InfraDeployRoleArn:
+    Value: !GetAtt InfraDeployRole.Arn
+  AppEcrPushRoleArn:
+    Value: !GetAtt AppEcrPushRole.Arn

@@ -1,0 +1,118 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Photo Uploader - root template nesting network/data/storage-cdn/ecs-alb/cicd stacks.
+  Deployed via `aws cloudformation package` + `aws cloudformation deploy`
+  (no GitSync - see AWS_LAB_BEST_PRACTICES.md for why).
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: photo-uploader
+  AzA:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1a
+  AzB:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Default: us-east-1b
+  DeployBucketName:
+    Type: String
+    Description: Pre-existing S3 bucket (created by the one-time bootstrap stack) used for CFN packaging, pipeline artifacts, and the CodeDeploy bundle.
+
+Resources:
+  NetworkStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./network.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        AzA: !Ref AzA
+        AzB: !Ref AzB
+
+  DataStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./data.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        PrivateSubnetA: !GetAtt NetworkStack.Outputs.PrivateSubnetA
+        PrivateSubnetB: !GetAtt NetworkStack.Outputs.PrivateSubnetB
+
+  StorageCdnStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./storage-cdn.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+
+  EcsAlbStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./ecs-alb.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        VpcId: !GetAtt NetworkStack.Outputs.VpcId
+        VpcCidr: !GetAtt NetworkStack.Outputs.VpcCidr
+        PublicSubnetA: !GetAtt NetworkStack.Outputs.PublicSubnetA
+        PublicSubnetB: !GetAtt NetworkStack.Outputs.PublicSubnetB
+        PrivateSubnetA: !GetAtt NetworkStack.Outputs.PrivateSubnetA
+        PrivateSubnetB: !GetAtt NetworkStack.Outputs.PrivateSubnetB
+        ImagesBucketArn: !GetAtt StorageCdnStack.Outputs.ImagesBucketArn
+        DbSecretArn: !GetAtt DataStack.Outputs.DbSecretArn
+        DbSecurityGroupId: !GetAtt DataStack.Outputs.DbSecurityGroupId
+
+  CicdStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: ./cicd.yaml
+      Parameters:
+        ProjectName: !Ref ProjectName
+        EcrRepositoryName: !GetAtt EcsAlbStack.Outputs.EcrRepositoryName
+        EcrRepositoryArn: !Sub arn:aws:ecr:${AWS::Region}:${AWS::AccountId}:repository/${EcsAlbStack.Outputs.EcrRepositoryName}
+        ClusterName: !GetAtt EcsAlbStack.Outputs.ClusterName
+        ServiceName: !GetAtt EcsAlbStack.Outputs.ServiceName
+        ProdListenerArn: !GetAtt EcsAlbStack.Outputs.ProdListenerArn
+        BlueTargetGroupName: !GetAtt EcsAlbStack.Outputs.BlueTargetGroupName
+        GreenTargetGroupName: !GetAtt EcsAlbStack.Outputs.GreenTargetGroupName
+        TaskExecutionRoleArn: !GetAtt EcsAlbStack.Outputs.TaskExecutionRoleArn
+        TaskRoleArn: !GetAtt EcsAlbStack.Outputs.TaskRoleArn
+        DeployBucketName: !Ref DeployBucketName
+        DeployBucketArn: !Sub arn:aws:s3:::${DeployBucketName}
+
+Outputs:
+  AlbDnsName:
+    Value: !GetAtt EcsAlbStack.Outputs.AlbDnsName
+  DistributionDomainName:
+    Value: !GetAtt StorageCdnStack.Outputs.DistributionDomainName
+  ImagesBucketName:
+    Value: !GetAtt StorageCdnStack.Outputs.ImagesBucketName
+  EcrRepositoryUri:
+    Value: !GetAtt EcsAlbStack.Outputs.EcrRepositoryUri
+  ClusterName:
+    Value: !GetAtt EcsAlbStack.Outputs.ClusterName
+  ServiceName:
+    Value: !GetAtt EcsAlbStack.Outputs.ServiceName
+  ContainerName:
+    Value: !GetAtt EcsAlbStack.Outputs.ContainerName
+  TaskDefinitionFamily:
+    Value: !GetAtt EcsAlbStack.Outputs.TaskDefinitionFamily
+  TaskExecutionRoleArn:
+    Value: !GetAtt EcsAlbStack.Outputs.TaskExecutionRoleArn
+  TaskRoleArn:
+    Value: !GetAtt EcsAlbStack.Outputs.TaskRoleArn
+  LogGroupName:
+    Value: !GetAtt EcsAlbStack.Outputs.LogGroupName
+  DbEndpointAddress:
+    Value: !GetAtt DataStack.Outputs.DbEndpointAddress
+  DbEndpointPort:
+    Value: !GetAtt DataStack.Outputs.DbEndpointPort
+  DbName:
+    Value: !GetAtt DataStack.Outputs.DbName
+  DbSecretArn:
+    Value: !GetAtt DataStack.Outputs.DbSecretArn
+  PipelineName:
+    Value: !GetAtt CicdStack.Outputs.PipelineName
+  CodeDeployApplicationName:
+    Value: !GetAtt CicdStack.Outputs.CodeDeployApplicationName
+  CodeDeployDeploymentGroupName:
+    Value: !GetAtt CicdStack.Outputs.CodeDeployDeploymentGroupName
