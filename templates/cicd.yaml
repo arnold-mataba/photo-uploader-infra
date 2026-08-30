@@ -114,6 +114,8 @@ Resources:
               - Effect: Allow
                 Action:
                   - codedeploy:CreateDeployment
+                  - codedeploy:GetApplication
+                  - codedeploy:GetDeploymentGroup
                   - codedeploy:GetDeployment
                   - codedeploy:GetDeploymentConfig
                   - codedeploy:GetApplicationRevision
