@@ -42,7 +42,11 @@ Resources:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
                 token.actions.githubusercontent.com:repository_id: '1351306199'
                 token.actions.githubusercontent.com:repository_owner_id: '296819917'
-                token.actions.githubusercontent.com:sub: repo:arnold-mataba/photo-uploader-infra:ref:refs/heads/main
+                # This account's GitHub OIDC subject claim is customized to
+                # embed owner/repo IDs inline (repo:OWNER@OWNER_ID/REPO@REPO_ID:ref:...),
+                # not the standard repo:OWNER/REPO:ref:... format - confirmed
+                # via CloudTrail against an actual failed AssumeRoleWithWebIdentity call.
+                token.actions.githubusercontent.com:sub: repo:arnold-mataba@296819917/photo-uploader-infra@1351306199:ref:refs/heads/main
       Policies:
         - PolicyName: CfnDeployPermissions
           PolicyDocument:
@@ -115,7 +119,7 @@ Resources:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
                 token.actions.githubusercontent.com:repository_id: '1351306250'
                 token.actions.githubusercontent.com:repository_owner_id: '296819917'
-                token.actions.githubusercontent.com:sub: repo:arnold-mataba/photo-uploader-app:ref:refs/heads/main
+                token.actions.githubusercontent.com:sub: repo:arnold-mataba@296819917/photo-uploader-app@1351306250:ref:refs/heads/main
       Policies:
         - PolicyName: EcrPushPermissions
           PolicyDocument:
